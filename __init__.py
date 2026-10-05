@@ -220,7 +220,7 @@ class PassSource(SecretSource):
                 # Retrieve the secret value via `pass show`
                 try:
                     proc = run_secret_cli(
-                        [pass_bin, "show", pass_path],
+                        [pass_bin, "show", "--", pass_path],
                         allow_env=["GNUPGHOME", "GPG_AGENT_INFO", "DBUS_SESSION_BUS_ADDRESS"],
                         timeout=10,
                     )
@@ -263,16 +263,32 @@ def register(ctx):
     Per the SecretSource plugin contract: "You fetch; the orchestrator applies."
     """
     ctx.register_secret_source(PassSource())
+    # Guidance note only when the operator actually enables the pass source —
+    # a disabled plugin must contribute nothing to the session prompt.
     ctx.register_system_prompt_section(
         "pass-secrets-resolution",
-        _SECRETS_PROMPT_NOTE,
+        _secrets_prompt_note,
     )
 
 
-# Static, ~600 chars of the 4000 cap. Frozen into each new session prompt.
-_SECRETS_PROMPT_NOTE = """## Fleet secrets: pass store, NOT raw env probes
+def _secrets_prompt_note(session_info=None) -> str:
+    """Rendered per session; empty string when the pass source is disabled or
+    absent (framework drops empty sections)."""
+    try:
+        from hermes_cli.config_effective import load_user_config_effective
+        cfg = load_user_config_effective() or {}
+        pass_cfg = (cfg.get("secrets", {}) or {}).get("pass", {})
+        if not (isinstance(pass_cfg, dict) and pass_cfg.get("enabled")):
+            return ""
+    except Exception:
+        return ""
+    return _SECRETS_PROMPT_NOTE
 
-Secrets (API keys, tokens) resolve from the GPG-encrypted pass store (~/.password-store) through Hermes' secret sources — they are NOT in os.environ or .env directly. Names listed in this profile's `terminal.env_passthrough` (config.yaml) are injected into terminal/execute_code child processes automatically: use them as plain env vars (`os.environ.get("NAME")`, `$NAME`). Do NOT run `pass show` in terminal — the declared names are already there.
+
+# Static guidance, frozen into each session prompt only when the source is enabled.
+_SECRETS_PROMPT_NOTE = """## Secrets: pass store, not raw env probes
+
+Secrets (API keys, tokens) resolve from the GPG-encrypted pass store through Hermes' secret sources — they are not read from `.env` files directly. Names declared in this profile's `terminal.env_passthrough` (config.yaml) are injected into terminal/execute_code child processes automatically: use them as plain env vars (`os.environ.get("NAME")`, `$NAME`). Do NOT run `pass show` in the terminal — the declared names are already there.
 
 - Which names: `grep -A30 env_passthrough <profile>/config.yaml` (per-profile list)
 - A name missing from env = not in this profile's passthrough list (add it to terminal.env_passthrough), not a missing secret

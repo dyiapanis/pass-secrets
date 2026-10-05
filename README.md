@@ -31,7 +31,7 @@ Resolution flow:
 
 ## What you'll see in session prompts
 
-The plugin also registers a static system-prompt note teaching agents where secrets resolve from (they cannot see raw process env; provider credentials are runtime-only by upstream design). That's ~600 characters of the 4000-char prompt budget, no dynamic content.
+The plugin also registers a conditional system-prompt note teaching agents where secrets resolve from (declared names are injected into child process env; provider credentials are runtime-only by upstream design). It appears **only when `secrets.pass.enabled` is true** and the `pass` binary is resolvable — a disabled plugin contributes nothing to the prompt. The note is ~900 characters of the 4000-char prompt budget, no dynamic content.
 
 ## Disclosures
 
