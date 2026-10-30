@@ -1,12 +1,13 @@
 name: pass-secrets
-version: 1.0.0
-description: "pass (password-store) secret source — GPG-encrypted, git-tracked, local filesystem. Resolves secrets from ~/.password-store into environment variables at startup. No network dependency, no token expiry, works in all subprocess contexts."
+version: 1.1.0
+description: "pass (password-store) secret source — resolves secrets from a local GPG-encrypted store into environment variables at startup, and stores new secrets from chat with /s."
 author: "D Yiapanis"
-kind: general
+kind: standalone
 # Secret-source plugin: fetch() is invoked by the orchestrator (never by the
 # agent), so the agent-visible capability surface is empty by design.
 provides_tools: []
-provides_hooks: []
+provides_hooks:
+- pre_gateway_dispatch
 provides_middleware: []
 requires_env: []
 requires_hermes: ">=0.21.4"

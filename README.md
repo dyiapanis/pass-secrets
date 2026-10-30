@@ -17,7 +17,7 @@ secrets:
   pass:
     enabled: true
     store_path: ~/.password-store   # default
-    subdirs: [shared, phoenix]       # pass directories to pull
+    subdirs: [shared, work]          # pass directories to pull
     override_existing: true          # pass wins over .env/shell
     timeout_seconds: 30
 ```
@@ -28,6 +28,37 @@ Resolution flow:
 2. The orchestrator re-pulls enabled secret sources at startup (`reset_secret_source_cache` + dotenv load)
 3. `fetch()` walks each configured subdirectory, runs `pass show <path>` per `.gpg` entry (10s timeout, GPG agent env preserved)
 4. Merged `{ENV_VAR: value}` returns to the orchestrator, which handles precedence, conflict detection, and provenance
+
+## Storing a secret from chat — `/s`
+
+The same plugin can write to the store without a shell, from any Hermes chat
+channel:
+
+```
+/s <name> <value>
+```
+
+Examples:
+
+```
+/s shared/MY_API_KEY sk-abc123      # every agent/profile
+/s agentname/MY_API_KEY sk-abc123   # one profile's directory only
+```
+
+The name is a pass path, so the leaf becomes the environment-variable name
+(`UPPER_SNAKE` enforced for injection — anything else is stored but warned
+about). Everything after the first space is the value, verbatim.
+
+The command registers as a `pre_gateway_dispatch` hook, which fires at ingress
+**before** Hermes' sender-authorisation check and before any session exists.
+The plugin applies no sender policy of its own: who may reach the bot at all is
+Hermes' channel/pairing management's concern. The practical consequence is that
+any message that does arrive can write to the store — so treat channel access
+as the boundary, and remember that a `shared/` entry becomes an environment
+variable inside every agent process.
+
+Values are passed to `pass insert` on stdin and are never logged, never written
+to conversation state, and never echoed back.
 
 ## What you'll see in session prompts
 
@@ -43,7 +74,7 @@ The plugin also registers a conditional system-prompt note teaching agents where
 ## Requirements
 
 - `pass` on PATH (GPG-based password store initialized: `pass init <GPG_KEY_ID>`)
-- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`)
+- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`; `/s` needs the `pre_gateway_dispatch` hook)
 - No Python dependencies beyond stdlib
 
 ## Missing/broken secrets fail cleanly
