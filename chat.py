@@ -1,7 +1,7 @@
 """chat half: /s stores a secret from chat, bypassing the session store.
 
 Registers ``pre_gateway_dispatch``, which fires at ingress BEFORE auth and
-before any session exists. A handled message returns ``{"action": "skip"}``,
+before any session exists. Every ``/s`` message returns ``{"action": "skip"}``,
 so the text never reaches the agent loop and is never written to state.db.
 The reply goes out through the platform adapter (still E2EE).
 
@@ -10,15 +10,24 @@ The reply goes out through the platform adapter (still E2EE).
 The name is ``shared/<KEY>`` (all agents) or ``<agent>/<KEY>`` (one profile).
 Everything after the first space is the value. Values are never logged.
 
-NO SENDER CHECK HERE: who may reach the bot is Hermes' channel/pairing
-management's decision, applied outside this hook. Anything that does arrive may
-store a secret; a shared/ entry becomes an environment variable for every agent.
+SENDER CHECK HERE: on the messaging path this hook runs before Hermes'
+sender authorization, so the hook itself decides who may store. Only senders
+listed in the plugin setting ``chat_allowed_users`` (``<platform>:<user_id>``,
+e.g. ``telegram:123456789``) can store; the list is empty by default, so ``/s``
+is off until you add yourself. Anyone else's ``/s`` is dropped without a reply
+(its text still never reaches the agent). A shared/ entry becomes an
+environment variable for every agent, so list only people you would hand a
+shell to.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 import subprocess
+
+logger = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
 PREFIX = "/s"
@@ -56,8 +65,12 @@ def _valid(name: str) -> bool:
 
 
 def _insert(name: str, value: str) -> bool:
+    env = dict(os.environ)
+    if _store_path:
+        # write to the store the source reads (secrets.pass.store_path)
+        env["PASSWORD_STORE_DIR"] = os.path.expanduser(_store_path)
     p = subprocess.run(["pass", "insert", "-m", "-f", name], input=value + "\n",
-                       capture_output=True, text=True, timeout=20)
+                       capture_output=True, text=True, timeout=20, env=env)
     return p.returncode == 0
 
 
@@ -84,6 +97,30 @@ def _is_secret_command(text: str) -> bool:
     return text == PREFIX or text.startswith(PREFIX + " ")
 
 
+# Set by register(): reads plugins.entries.pass-secrets.settings.<key>, and the
+# store the source reads, so /s writes where fetch() looks.
+_get_setting = None
+_store_path = None
+
+
+def _sender_id(source) -> str:
+    platform = getattr(source, "platform", None)
+    platform = getattr(platform, "value", platform) or ""
+    user_id = getattr(source, "user_id", None)
+    return f"{platform}:{user_id}" if platform and user_id else ""
+
+
+def _allowed(source) -> bool:
+    """Only an explicitly listed <platform>:<user_id> may store. Empty = off."""
+    sender = _sender_id(source)
+    if not sender or _get_setting is None:
+        return False
+    listed = _get_setting("chat_allowed_users", []) or []
+    if not isinstance(listed, (list, tuple)):
+        return False
+    return sender in {str(item).strip() for item in listed}
+
+
 async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs):
     """pre_gateway_dispatch. Fail closed: any error still skips the message."""
     try:
@@ -91,6 +128,12 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
         text = (getattr(event, "text", "") or "").strip()
         if not source or not text or not _is_secret_command(text):
             return None
+        if not _allowed(source):
+            # Runs before Hermes' auth: never reply to (or store for) an
+            # unlisted sender, and never pass the value on to the agent.
+            logger.warning("pass-secrets: /s from %s refused (not in chat_allowed_users)",
+                           _sender_id(source) or "unknown sender")
+            return {"action": "skip", "reason": "pass-secrets: sender not allowed"}
 
         await _send(gateway, source, _run(text))
         return {"action": "skip", "reason": "pass-secrets: handled"}
@@ -100,7 +143,7 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
 
 async def _send(gateway, source, text: str) -> None:
     try:
-        adapter = gateway._delivery_adapter_for(source)
+        adapter = (getattr(gateway, "adapters", None) or {}).get(source.platform)
         if adapter:
             await adapter.send(source.chat_id, text)
     except Exception:  # noqa: BLE001

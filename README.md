@@ -50,12 +50,23 @@ The name is a pass path, so the leaf becomes the environment-variable name
 about). Everything after the first space is the value, verbatim.
 
 The command registers as a `pre_gateway_dispatch` hook, which fires at ingress
-**before** Hermes' sender-authorisation check and before any session exists.
-The plugin applies no sender policy of its own: who may reach the bot at all is
-Hermes' channel/pairing management's concern. The practical consequence is that
-any message that does arrive can write to the store — so treat channel access
-as the boundary, and remember that a `shared/` entry becomes an environment
-variable inside every agent process.
+**before** Hermes' sender-authorisation check and before any session exists, so
+the plugin decides who may store. `/s` is **off until you list yourself**: only
+senders named in the plugin setting `chat_allowed_users` (as
+`<platform>:<user_id>`) can store. Anyone else's `/s` is dropped without a
+reply, and its text still never reaches the agent.
+
+```yaml
+plugins:
+  entries:
+    pass-secrets:
+      settings:
+        chat_allowed_users: ["telegram:123456789"]
+```
+
+`/s` writes to `secrets.pass.store_path`, the same store the source reads.
+A `shared/` entry becomes an environment variable inside every agent process,
+so list only people you would hand a shell to.
 
 Values are passed to `pass insert` on stdin and are never logged, never written
 to conversation state, and never echoed back.
@@ -74,7 +85,7 @@ The plugin also registers a conditional system-prompt note teaching agents where
 ## Requirements
 
 - `pass` on PATH (GPG-based password store initialized: `pass init <GPG_KEY_ID>`)
-- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`; `/s` needs the `pre_gateway_dispatch` hook)
+- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`; `/s` needs the `pre_gateway_dispatch` hook and `ctx.get_config`)
 - No Python dependencies beyond stdlib
 
 ## Missing/broken secrets fail cleanly
