@@ -4,7 +4,7 @@
                 startup (the SecretSource contract: "you fetch; the orchestrator
                 applies"). Nothing here ever sees chat traffic.
 
-    chat.py     the `/s` command: stores a secret from chat straight into the
+    chat.py     the `/secret` command: stores a secret from chat straight into the
                 store via `pass insert`. The `pre_gateway_dispatch` hook fires at
                 ingress, before auth and before any session exists, and returns
                 "skip" — the value never reaches the agent loop or state.db.
@@ -24,7 +24,7 @@ Config in config.yaml:
       entries:
         pass-secrets:
           settings:
-            chat_allowed_users: ["telegram:123456789"]   # who may use /s
+            chat_allowed_users: ["telegram:123456789"]   # who may use /secret
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def register(ctx):
 
 
 def _pass_store_path():
-    """secrets.pass.store_path, so /s writes to the store the source reads."""
+    """secrets.pass.store_path, so /secret writes to the store the source reads."""
     try:
         from hermes_cli.config import load_config
         cfg = (load_config() or {}).get("secrets", {}).get("pass", {}) or {}
