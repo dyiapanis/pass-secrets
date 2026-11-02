@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-check for pass-secrets — runs from a checkout, no Hermes install needed.
 
-    python3 selftest.py
+    python3 tests/selftest.py
 
 Covers registration wiring, the source contract against the local pass store
 (skipped when no store is present), and the /s chat lane's parsing rules.
@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 spec = importlib.util.spec_from_file_location(
@@ -43,6 +43,9 @@ def check_registration() -> None:
 
         def register_hook(self, name, cb, **_kwargs):
             calls.append(("hook", name, cb.__name__))
+
+        def get_config(self, key, default=None):
+            return default
 
     m.register(Ctx())
     assert calls == [
@@ -101,37 +104,50 @@ def check_injection_hint() -> None:
     print("  PASS  injection hint")
 
 
-def check_no_sender_gate() -> None:
-    """The hook applies no sender policy: a stranger's /s is still handled."""
-    assert not hasattr(chat, "_authorized") and not hasattr(chat, "_allowlist")
+def _dispatch(user_id, allowed):
+    """Run on_dispatch for one /s message; returns (hook result, reply sent)."""
 
     class Src:
-        user_id = "@stranger:example.org"
-        chat_id = "!room"
+        platform = "telegram"
+        chat_id = "100"
         profile = ""
+
+    Src.user_id = user_id
 
     class Ev:
         source = Src()
         text = "/s shared/SELFTEST_ANY v"
 
-    class Gw:
+    class Adapter:
         sent = None
-
-        def _delivery_adapter_for(self, _source):
-            return self
 
         async def send(self, _chat_id, text):
             self.sent = text
 
-    gw = Gw()
-    original = chat._run
+    adapter = Adapter()
+
+    class Gw:
+        adapters = {"telegram": adapter}
+
+    original = (chat._run, chat._get_setting)
     chat._run = lambda _text: "STORED"
+    chat._get_setting = lambda key, default=None: allowed if key == "chat_allowed_users" else default
     try:
-        asyncio.run(chat.on_dispatch(event=Ev(), gateway=gw))
+        result = asyncio.run(chat.on_dispatch(event=Ev(), gateway=Gw()))
     finally:
-        chat._run = original
-    assert gw.sent == "STORED", f"unexpected reply: {gw.sent!r}"
-    print("  PASS  no sender gate")
+        chat._run, chat._get_setting = original
+    return result, adapter.sent
+
+
+def check_sender_gate() -> None:
+    """The hook runs before Hermes' auth, so only a listed sender may store."""
+    result, sent = _dispatch("999", [])
+    assert result["action"] == "skip" and sent is None, (result, sent)  # off by default
+    result, sent = _dispatch("999", ["telegram:123"])
+    assert result["action"] == "skip" and sent is None, (result, sent)  # stranger
+    result, sent = _dispatch("123", ["telegram:123"])
+    assert result["action"] == "skip" and sent == "STORED", (result, sent)
+    print("  PASS  sender gate")
 
 
 def main() -> int:
@@ -140,7 +156,7 @@ def main() -> int:
     check_usage()
     check_name_rules()
     check_injection_hint()
-    check_no_sender_gate()
+    check_sender_gate()
     print("\nALL CHECKS PASSED")
     return 0
 
