@@ -1,11 +1,11 @@
-"""chat half: /secret stores a secret from chat, bypassing the session store.
+"""chat half: !secret stores a secret from chat, bypassing the session store.
 
 Registers ``pre_gateway_dispatch``, which fires at ingress BEFORE auth and
-before any session exists. Every ``/secret`` message returns ``{"action": "skip"}``,
+before any session exists. Every ``!secret`` message returns ``{"action": "skip"}``,
 so the text never reaches the agent loop and is never written to state.db.
 The reply goes out through the platform adapter (still E2EE).
 
-    /secret <name> <value>
+    !secret <name> <value>
 
 The name is ``shared/<KEY>`` (all agents) or ``<agent>/<KEY>`` (one profile).
 Everything after the first space is the value. Values are never logged.
@@ -13,8 +13,8 @@ Everything after the first space is the value. Values are never logged.
 SENDER CHECK HERE: on the messaging path this hook runs before Hermes'
 sender authorization, so the hook itself decides who may store. Only senders
 listed in the plugin setting ``chat_allowed_users`` (``<platform>:<user_id>``,
-e.g. ``telegram:123456789``) can store; the list is empty by default, so ``/secret``
-is off until you add yourself. Anyone else's ``/secret`` is dropped without a reply
+e.g. ``telegram:123456789``) can store; the list is empty by default, so ``!secret``
+is off until you add yourself. Anyone else's ``!secret`` is dropped without a reply
 (its text still never reaches the agent). A shared/ entry becomes an
 environment variable for every agent, so list only people you would hand a
 shell to.
@@ -30,16 +30,17 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
-PREFIX = "/secret"
+PREFIX = "!secret"
+PREFIXES = (PREFIX, "/secret")  # `/secret` only works where unknown slash commands pass through
 
 USAGE = (
-    "**/secret** — store a secret\n"
+    "**!secret** — store a secret\n"
     "\n"
-    "`/secret <name> <value>`\n"
+    "`!secret <name> <value>`\n"
     "\n"
     "Examples:\n"
-    "`/secret shared/MY_API_KEY sk-abc123`   ← every agent\n"
-    "`/secret agentname/MY_API_KEY sk-abc123`   ← this agent only\n"
+    "`!secret shared/MY_API_KEY sk-abc123`   ← every agent\n"
+    "`!secret agentname/MY_API_KEY sk-abc123`   ← this agent only\n"
     "\n"
     "`shared/` = every agent · `agentname/` = this agent only\n"
     "`MY_API_KEY` = the key name — you choose it\n"
@@ -54,7 +55,7 @@ def _err(msg: str) -> str:
 
 def _valid(name: str) -> bool:
     # must be a path: `<dir>/<KEY>`. A bare word is rejected, so a mistyped
-    # command ("/secret get shared/X") can never be stored as an entry called "get".
+    # command ("!secret get shared/X") can never be stored as an entry called "get".
     return (
         bool(name)
         and "/" in name
@@ -75,7 +76,7 @@ def _insert(name: str, value: str) -> bool:
 
 
 def _run(text: str) -> str:
-    """Handle one /secret message; returns the reply text."""
+    """Handle one !secret message; returns the reply text."""
     parts = text.split(None, 2)
     if len(parts) == 1:
         return USAGE
@@ -94,11 +95,15 @@ def _run(text: str) -> str:
 
 
 def _is_secret_command(text: str) -> bool:
-    return text == PREFIX or text.startswith(PREFIX + " ")
+    # `!secret` is the primary trigger because Mattermost (and any platform
+    # with a slash-command registry) rejects an unregistered `/word` before
+    # the message is posted — the hook never runs. `/secret` is kept for
+    # platforms that pass unknown slash commands through as text.
+    return any(text == p or text.startswith(p + " ") for p in PREFIXES)
 
 
 # Set by register(): reads plugins.entries.pass-secrets.settings.<key>, and the
-# store the source reads, so /secret writes where fetch() looks.
+# store the source reads, so !secret writes where fetch() looks.
 _get_setting = None
 _store_path = None
 
@@ -141,7 +146,7 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
             if sender not in _REFUSED_SENDERS:
                 _REFUSED_SENDERS.add(sender)
                 logger.warning(
-                    "pass-secrets: /secret from %s refused (not in chat_allowed_users; "
+                    "pass-secrets: !secret from %s refused (not in chat_allowed_users; "
                     "further refusals from this sender are not logged)", sender)
             return {"action": "skip", "reason": "pass-secrets: sender not allowed"}
 
