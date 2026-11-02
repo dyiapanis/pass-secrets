@@ -4,7 +4,7 @@
     python3 tests/selftest.py
 
 Covers registration wiring, the source contract against the local pass store
-(skipped when no store is present), and the /s chat lane's parsing rules.
+(skipped when no store is present), and the /secret chat lane's parsing rules.
 """
 from __future__ import annotations
 
@@ -76,10 +76,10 @@ def check_source() -> None:
 
 def check_usage() -> None:
     """Usage text is generic and teaches both scopes."""
-    text = chat._run("/s")
-    assert "/s <name> <value>" in text, text
-    assert "/s shared/MY_API_KEY" in text, text
-    assert "/s agentname/MY_API_KEY" in text, text
+    text = chat._run("/secret")
+    assert "/secret <name> <value>" in text, text
+    assert "/secret shared/MY_API_KEY" in text, text
+    assert "/secret agentname/MY_API_KEY" in text, text
     assert "`agentname/` = this agent only" in text, text
     print("  PASS  usage text")
 
@@ -91,21 +91,24 @@ def check_name_rules() -> None:
     for bad in ("get", "", "../etc/passwd", "shared/../x", "breakglass/K", "shared/", "/leading"):
         assert not chat._valid(bad), bad
     assert not chat._is_secret_command("/suggest")
-    assert chat._is_secret_command("/s x")
+    assert not chat._is_secret_command("/secrets leak")  # prefix must not swallow a longer word
+    assert not chat._is_secret_command("/secretx")
+    assert chat._is_secret_command("/secret x")
+    assert chat._is_secret_command("/secret")
     print("  PASS  name rules")
 
 
 def check_injection_hint() -> None:
     """Non UPPER_SNAKE leaves warn that the value will not become an env var."""
-    assert "will not be injected" in chat._run("/s shared/sc_lower v")
-    assert "will not be injected" not in chat._run("/s shared/SC_UPPER v")
+    assert "will not be injected" in chat._run("/secret shared/sc_lower v")
+    assert "will not be injected" not in chat._run("/secret shared/SC_UPPER v")
     for name in ("shared/sc_lower", "shared/SC_UPPER"):
         subprocess.run(["pass", "rm", "-f", name], capture_output=True)
     print("  PASS  injection hint")
 
 
 def _dispatch(user_id, allowed):
-    """Run on_dispatch for one /s message; returns (hook result, reply sent)."""
+    """Run on_dispatch for one /secret message; returns (hook result, reply sent)."""
 
     class Src:
         platform = "telegram"
@@ -116,7 +119,7 @@ def _dispatch(user_id, allowed):
 
     class Ev:
         source = Src()
-        text = "/s shared/SELFTEST_ANY v"
+        text = "/secret shared/SELFTEST_ANY v"
 
     class Adapter:
         sent = None

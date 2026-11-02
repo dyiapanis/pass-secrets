@@ -1,11 +1,11 @@
-"""chat half: /s stores a secret from chat, bypassing the session store.
+"""chat half: /secret stores a secret from chat, bypassing the session store.
 
 Registers ``pre_gateway_dispatch``, which fires at ingress BEFORE auth and
-before any session exists. Every ``/s`` message returns ``{"action": "skip"}``,
+before any session exists. Every ``/secret`` message returns ``{"action": "skip"}``,
 so the text never reaches the agent loop and is never written to state.db.
 The reply goes out through the platform adapter (still E2EE).
 
-    /s <name> <value>
+    /secret <name> <value>
 
 The name is ``shared/<KEY>`` (all agents) or ``<agent>/<KEY>`` (one profile).
 Everything after the first space is the value. Values are never logged.
@@ -13,8 +13,8 @@ Everything after the first space is the value. Values are never logged.
 SENDER CHECK HERE: on the messaging path this hook runs before Hermes'
 sender authorization, so the hook itself decides who may store. Only senders
 listed in the plugin setting ``chat_allowed_users`` (``<platform>:<user_id>``,
-e.g. ``telegram:123456789``) can store; the list is empty by default, so ``/s``
-is off until you add yourself. Anyone else's ``/s`` is dropped without a reply
+e.g. ``telegram:123456789``) can store; the list is empty by default, so ``/secret``
+is off until you add yourself. Anyone else's ``/secret`` is dropped without a reply
 (its text still never reaches the agent). A shared/ entry becomes an
 environment variable for every agent, so list only people you would hand a
 shell to.
@@ -30,16 +30,16 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
-PREFIX = "/s"
+PREFIX = "/secret"
 
 USAGE = (
-    "**/s** — store a secret\n"
+    "**/secret** — store a secret\n"
     "\n"
-    "`/s <name> <value>`\n"
+    "`/secret <name> <value>`\n"
     "\n"
     "Examples:\n"
-    "`/s shared/MY_API_KEY sk-abc123`   ← every agent\n"
-    "`/s agentname/MY_API_KEY sk-abc123`   ← this agent only\n"
+    "`/secret shared/MY_API_KEY sk-abc123`   ← every agent\n"
+    "`/secret agentname/MY_API_KEY sk-abc123`   ← this agent only\n"
     "\n"
     "`shared/` = every agent · `agentname/` = this agent only\n"
     "`MY_API_KEY` = the key name — you choose it\n"
@@ -54,7 +54,7 @@ def _err(msg: str) -> str:
 
 def _valid(name: str) -> bool:
     # must be a path: `<dir>/<KEY>`. A bare word is rejected, so a mistyped
-    # command ("/s get shared/X") can never be stored as an entry called "get".
+    # command ("/secret get shared/X") can never be stored as an entry called "get".
     return (
         bool(name)
         and "/" in name
@@ -75,7 +75,7 @@ def _insert(name: str, value: str) -> bool:
 
 
 def _run(text: str) -> str:
-    """Handle one /s message; returns the reply text."""
+    """Handle one /secret message; returns the reply text."""
     parts = text.split(None, 2)
     if len(parts) == 1:
         return USAGE
@@ -98,9 +98,13 @@ def _is_secret_command(text: str) -> bool:
 
 
 # Set by register(): reads plugins.entries.pass-secrets.settings.<key>, and the
-# store the source reads, so /s writes where fetch() looks.
+# store the source reads, so /secret writes where fetch() looks.
 _get_setting = None
 _store_path = None
+
+# Senders already refused once; keeps an unlisted DM from writing a log line
+# per message (the refusal itself is never suppressed).
+_REFUSED_SENDERS: set = set()
 
 
 def _sender_id(source) -> str:
@@ -131,8 +135,14 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
         if not _allowed(source):
             # Runs before Hermes' auth: never reply to (or store for) an
             # unlisted sender, and never pass the value on to the agent.
-            logger.warning("pass-secrets: /s from %s refused (not in chat_allowed_users)",
-                           _sender_id(source) or "unknown sender")
+            # Log once per sender: an unlisted DM is a probe, not a reason to
+            # write a warning for every message.
+            sender = _sender_id(source) or "unknown sender"
+            if sender not in _REFUSED_SENDERS:
+                _REFUSED_SENDERS.add(sender)
+                logger.warning(
+                    "pass-secrets: /secret from %s refused (not in chat_allowed_users; "
+                    "further refusals from this sender are not logged)", sender)
             return {"action": "skip", "reason": "pass-secrets: sender not allowed"}
 
         await _send(gateway, source, _run(text))
@@ -143,7 +153,14 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
 
 async def _send(gateway, source, text: str) -> None:
     try:
-        adapter = (getattr(gateway, "adapters", None) or {}).get(source.platform)
+        adapters = getattr(gateway, "adapters", None) or {}
+        platform = getattr(source, "platform", None)
+        # gateway.adapters is keyed by the Platform enum; a source built by a
+        # platform adapter may carry the plain string. Try both, same
+        # normalisation _sender_id uses, or the reply is silently dropped.
+        adapter = adapters.get(platform)
+        if adapter is None:
+            adapter = adapters.get(getattr(platform, "value", platform))
         if adapter:
             await adapter.send(source.chat_id, text)
     except Exception:  # noqa: BLE001
