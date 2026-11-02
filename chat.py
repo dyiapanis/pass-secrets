@@ -111,6 +111,10 @@ _store_path = None
 # per message (the refusal itself is never suppressed).
 _REFUSED_SENDERS: set = set()
 
+# Failure kinds already logged (see _warn_once).
+_WARNED: set = set()
+
+
 
 def _sender_id(source) -> str:
     platform = getattr(source, "platform", None)
@@ -156,18 +160,43 @@ async def on_dispatch(*, event=None, gateway=None, session_store=None, **_kwargs
         return {"action": "skip", "reason": "pass-secrets: error"}
 
 
+def _warn_once(key: str, msg: str, *args) -> None:
+    """One log line per failure kind — a broken reply path must not be silent."""
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(msg, *args)
+
+
+def _reply_adapter(gateway, source):
+    """The adapter that ANSWERS this source.
+
+    ``gateway.adapters`` only holds the primary/default profile's adapters; a
+    multiplex profile (a served sibling) keeps its own in ``_profile_adapters``.
+    ``_delivery_adapter_for`` is the router that knows the difference, so it goes
+    first and the public map is the fallback.
+    """
+    router = getattr(gateway, "_delivery_adapter_for", None)
+    if callable(router):
+        try:
+            adapter = router(source)
+            if adapter is not None:
+                return adapter
+        except Exception as exc:  # noqa: BLE001
+            _warn_once("router-failed", "pass-secrets: adapter routing failed: %s", exc)
+    adapters = getattr(gateway, "adapters", None) or {}
+    platform = getattr(source, "platform", None)
+    return adapters.get(platform) or adapters.get(getattr(platform, "value", platform))
+
+
 async def _send(gateway, source, text: str) -> None:
+    adapter = _reply_adapter(gateway, source)
+    if adapter is None:
+        _warn_once("no-adapter", "pass-secrets: no reply adapter for %s — reply dropped",
+                   getattr(source, "platform", "?"))
+        return
     try:
-        adapters = getattr(gateway, "adapters", None) or {}
-        platform = getattr(source, "platform", None)
-        # gateway.adapters is keyed by the Platform enum; a source built by a
-        # platform adapter may carry the plain string. Try both, same
-        # normalisation _sender_id uses, or the reply is silently dropped.
-        adapter = adapters.get(platform)
-        if adapter is None:
-            adapter = adapters.get(getattr(platform, "value", platform))
-        if adapter:
-            await adapter.send(source.chat_id, text)
-    except Exception:  # noqa: BLE001
-        pass
+        await adapter.send(source.chat_id, text)
+    except Exception as exc:  # noqa: BLE001 — never let the reply break the skip
+        _warn_once("send-failed", "pass-secrets: reply send failed: %s", exc)
 
