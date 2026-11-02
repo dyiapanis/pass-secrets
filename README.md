@@ -29,20 +29,26 @@ Resolution flow:
 3. `fetch()` walks each configured subdirectory, runs `pass show <path>` per `.gpg` entry (10s timeout, GPG agent env preserved)
 4. Merged `{ENV_VAR: value}` returns to the orchestrator, which handles precedence, conflict detection, and provenance
 
-## Storing a secret from chat — `/secret`
+## Storing a secret from chat — `!secret`
 
 The same plugin can write to the store without a shell, from any Hermes chat
 channel:
 
 ```
-/secret <name> <value>
+!secret <name> <value>
 ```
+
+`!secret` rather than `/secret`: a slash-prefixed word is claimed by the chat
+platform's own command registry first. Mattermost answers *"Command with a
+trigger of secret not found"* and never posts the message, so the hook never
+runs. `!secret` is plain text and always reaches the gateway. `/secret` still
+works on platforms that pass unknown slash commands through as ordinary text.
 
 Examples:
 
 ```
-/secret shared/MY_API_KEY sk-abc123      # every agent/profile
-/secret agentname/MY_API_KEY sk-abc123   # one profile's directory only
+!secret shared/MY_API_KEY sk-abc123      # every agent/profile
+!secret agentname/MY_API_KEY sk-abc123   # one profile's directory only
 ```
 
 The name is a pass path, so the leaf becomes the environment-variable name
@@ -51,9 +57,9 @@ about). Everything after the first space is the value, verbatim.
 
 The command registers as a `pre_gateway_dispatch` hook, which fires at ingress
 **before** Hermes' sender-authorisation check and before any session exists, so
-the plugin decides who may store. `/secret` is **off until you list yourself**: only
+the plugin decides who may store. `!secret` is **off until you list yourself**: only
 senders named in the plugin setting `chat_allowed_users` (as
-`<platform>:<user_id>`) can store. Anyone else's `/secret` is dropped without a
+`<platform>:<user_id>`) can store. Anyone else's `!secret` is dropped without a
 reply, and its text still never reaches the agent.
 
 ```yaml
@@ -64,7 +70,7 @@ plugins:
         chat_allowed_users: ["telegram:123456789"]
 ```
 
-`/secret` writes to `secrets.pass.store_path`, the same store the source reads.
+`!secret` writes to `secrets.pass.store_path`, the same store the source reads.
 A `shared/` entry becomes an environment variable inside every agent process,
 so list only people you would hand a shell to.
 
@@ -85,7 +91,7 @@ The plugin also registers a conditional system-prompt note teaching agents where
 ## Requirements
 
 - `pass` on PATH (GPG-based password store initialized: `pass init <GPG_KEY_ID>`)
-- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`; `/secret` needs the `pre_gateway_dispatch` hook and `ctx.get_config`)
+- Hermes Agent `>=0.21.4` (SecretSource plugin API with `register_secret_source`; `!secret` needs the `pre_gateway_dispatch` hook and `ctx.get_config`)
 - No Python dependencies beyond stdlib
 
 ## Missing/broken secrets fail cleanly
