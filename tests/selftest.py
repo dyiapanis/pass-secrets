@@ -156,6 +156,31 @@ def check_sender_gate() -> None:
     print("  PASS  sender gate")
 
 
+def check_reply_routing() -> None:
+    """The reply goes through the router when there is one.
+
+    gateway.adapters only holds the primary profile's adapters; a multiplex
+    profile must reply through _delivery_adapter_for or the reply is dropped.
+    """
+    from types import SimpleNamespace
+
+    primary, mine = object(), object()
+
+    class Routed:
+        adapters = {"telegram": primary}
+
+        def _delivery_adapter_for(self, source):
+            return mine
+
+    class Plain:
+        adapters = {"telegram": primary}
+
+    src = SimpleNamespace(platform="telegram", chat_id="c", user_id="1")
+    assert chat._reply_adapter(Routed(), src) is mine
+    assert chat._reply_adapter(Plain(), src) is primary
+    print("  PASS  reply routing")
+
+
 def main() -> int:
     check_registration()
     check_source()
@@ -163,6 +188,7 @@ def main() -> int:
     check_name_rules()
     check_injection_hint()
     check_sender_gate()
+    check_reply_routing()
     print("\nALL CHECKS PASSED")
     return 0
 
