@@ -1,8 +1,12 @@
 name: pass-secrets
 version: 1.1.0
-description: "pass (password-store) secret source — resolves secrets from a local GPG-encrypted store into environment variables at startup, and stores new secrets from chat with /s."
+description: "pass (password-store) secret source — resolves secrets from a local GPG-encrypted store into environment variables at startup, and stores new secrets from chat with !secret."
 author: "D Yiapanis"
 kind: standalone
+platforms:
+  # `pass` is a bash script (bash + gpg + git + tree). No native Windows build.
+  - linux
+  - macos
 # Secret-source plugin: fetch() is invoked by the orchestrator (never by the
 # agent), so the agent-visible capability surface is empty by design.
 provides_tools: []
